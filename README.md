@@ -16,6 +16,7 @@ If a CrossPoint build changes for a device that you choose, this program sends a
 - `devices`: list of device names, or `["*"]` for all devices.
 - `channels`: list of channel names. The default is `["Stable"]`. Other names are `Beta`, `Nightly`, `Stock English`, and `Stock Chinese`.
 - `interval_seconds`: time between checks. The default is 900 and the minimum is 120.
+- `ignore_text`: list of words. The program drops any part of a version text that contains one of them, so a change there does not send a message. For example, `["Indic"]` ignores the Indic Language Support entry in a shared Beta text.
 - `notify_on_first_run`: if `true`, the first run sends a message for every selected channel. The default is `false`.
 
 ## Commands

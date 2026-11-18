@@ -35,6 +35,7 @@ def load_config():
         "channels": ["Stable"],
         "interval_seconds": 900,
         "notify_on_first_run": False,
+        "ignore_text": [],
     }
     cfg.update(load_json(CONFIG_PATH, {}))
     cfg["webhook"] = os.environ.get("DISCORD_WEBHOOK_URL", "")
@@ -48,6 +49,13 @@ def fetch_components():
         return json.load(resp)["components"]
 
 
+def clean_version(text, ignore):
+    """Drop '; '-separated parts that contain any ignored text."""
+    parts = [p.strip() for p in text.split(";")]
+    kept = [p for p in parts if not any(i.lower() in p.lower() for i in ignore)]
+    return "; ".join(kept)
+
+
 def select_targets(components, cfg):
     devices = {d.lower() for d in cfg["devices"]}
     channels = {c.lower() for c in cfg["channels"]}
@@ -59,7 +67,12 @@ def select_targets(components, cfg):
         for child in parent.get("children", []):
             if child["name"].lower() in channels:
                 targets.append(
-                    (parent["name"], child["name"], child["id"], child["description"])
+                    (
+                        parent["name"],
+                        child["name"],
+                        child["id"],
+                        clean_version(child["description"], cfg["ignore_text"]),
+                    )
                 )
     return targets
 
