@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Send a Discord message when a CrossPoint build changes for chosen devices."""
 import argparse
+import html
+import re
 import json
 import os
 import sys
@@ -9,6 +11,7 @@ import urllib.error
 import urllib.request
 
 API_URL = "https://updates.crosspointreader.com/v3/components.json"
+FEED_URL = "https://updates.crosspointreader.com/history.atom"
 SITE_URL = "https://updates.crosspointreader.com"
 USER_AGENT = "update-notifier/1.0"
 MIN_INTERVAL = 120
@@ -36,6 +39,7 @@ def load_config():
         "interval_seconds": 900,
         "notify_on_first_run": False,
         "ignore_text": [],
+        "include_changelog": True,
     }
     cfg.update(load_json(CONFIG_PATH, {}))
     cfg["webhook"] = os.environ.get("DISCORD_WEBHOOK_URL", "")
@@ -115,16 +119,43 @@ def post_webhook(webhook, payload):
     return False
 
 
-def send_update(webhook, device, channel, old, new):
+def fetch_changelog(device, version):
+    """Return (text, link) from the newest feed entry that mentions the version."""
+    req = urllib.request.Request(FEED_URL, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        feed = resp.read().decode("utf-8", "replace")
+    parts = [p.strip().lower() for p in version.split(";") if p.strip()]
+    found = []
+    for entry in re.findall(r"<entry>(.*?)</entry>", feed, flags=re.S):
+        title = html.unescape(re.search(r"<title>(.*?)</title>", entry, re.S).group(1))
+        if not any(p in title.lower() for p in parts):
+            continue
+        body = re.search(r"<content[^>]*>(.*?)</content>", entry, re.S).group(1)
+        body = body.replace("<![CDATA[", "").replace("]]>", "")
+        body = body.split("</strong> -", 1)[-1]
+        body = re.sub(r"<br\s*/?>", "\n", body)
+        body = html.unescape(re.sub(r"<[^>]+>", "", body)).strip()
+        link = re.search(r'rel="alternate"[^>]*href="([^"]+)"', entry)
+        found.append((title, body, link.group(1) if link else SITE_URL))
+    if not found:
+        return None, None
+    key = device.lower().replace("xteink ", "")
+    pick = next((f for f in found if key in f[0].lower()), found[0])
+    return pick[1], pick[2]
+
+
+def send_update(webhook, device, channel, old, new, changelog=None, link=SITE_URL):
     embed = {
         "title": f"New CrossPoint build: {device} {channel}",
-        "url": SITE_URL,
+        "url": link,
         "color": 0x2ECC71,
         "fields": [
             {"name": "Old", "value": old or "none", "inline": True},
             {"name": "New", "value": new, "inline": True},
         ],
     }
+    if changelog:
+        embed["description"] = changelog[:1500]
     return post_webhook(webhook, {"embeds": [embed]})
 
 
@@ -149,7 +180,15 @@ def check(cfg, first_run_ref):
         if prev is None and first_run and not cfg["notify_on_first_run"]:
             ok = True
         else:
-            ok = send_update(cfg["webhook"], device, channel, prev, version)
+            text, link = None, SITE_URL
+            if cfg["include_changelog"]:
+                try:
+                    text, link = fetch_changelog(device, version)
+                except Exception as e:
+                    log(f"Changelog unavailable: {e}")
+            ok = send_update(
+                cfg["webhook"], device, channel, prev, version, text, link or SITE_URL
+            )
             if ok:
                 log(f"Notified: {device} {channel} {prev} -> {version}")
         if ok:
