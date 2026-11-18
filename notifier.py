@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 API_URL = "https://updates.crosspointreader.com/v3/components.json"
@@ -159,6 +160,20 @@ def send_update(webhook, device, channel, old, new, changelog=None, link=SITE_UR
     return post_webhook(webhook, {"embeds": [embed]})
 
 
+def push_kuma(status, msg):
+    """Send a heartbeat to an Uptime Kuma push monitor, if configured."""
+    base = os.environ.get("UPTIME_KUMA_PUSH_URL", "")
+    if not base:
+        return
+    query = urllib.parse.urlencode({"status": status, "msg": msg[:200], "ping": ""})
+    sep = "&" if "?" in base else "?"
+    req = urllib.request.Request(base + sep + query, headers={"User-Agent": USER_AGENT})
+    try:
+        urllib.request.urlopen(req, timeout=15).close()
+    except Exception as e:
+        log(f"Uptime Kuma push failed: {e}")
+
+
 def save_state(state):
     tmp = STATE_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -234,8 +249,10 @@ def main():
     while True:
         try:
             check(cfg, None)
+            push_kuma("up", "OK")
         except Exception as e:
             log(f"Check failed: {e}")
+            push_kuma("down", f"Check failed: {e}")
         if args.once:
             return 0
         time.sleep(cfg["interval_seconds"])

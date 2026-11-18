@@ -27,3 +27,15 @@ If a CrossPoint build changes for a device that you choose, this program sends a
 - `python3 notifier.py --once` checks one time and exits.
 
 Outside Docker, set `CONFIG_PATH` and `STATE_PATH` to local files and export `DISCORD_WEBHOOK_URL`.
+
+## Uptime Kuma
+
+To get an alert when the notifier stops, add a push monitor in Uptime Kuma.
+
+1. In Uptime Kuma, click Add New Monitor and set Monitor Type to Push.
+2. Set Heartbeat Interval to a value larger than `interval_seconds`, for example 1200 seconds.
+3. Copy the Push URL that Uptime Kuma shows. Remove the part after the token, so that the URL ends with `/api/push/<token>`.
+4. Put the URL in `.env` as `UPTIME_KUMA_PUSH_URL=`.
+5. Run `docker compose up -d`.
+
+After each successful check, the notifier sends an up heartbeat. If a check fails, it sends a down heartbeat with the error text.
