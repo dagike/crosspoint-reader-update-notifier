@@ -14,6 +14,10 @@ import urllib.request
 API_URL = "https://updates.crosspointreader.com/v3/components.json"
 FEED_URL = "https://updates.crosspointreader.com/history.atom"
 SITE_URL = "https://updates.crosspointreader.com"
+RELEASES_URL = (
+    "https://api.github.com/repos/crosspoint-reader/crosspoint-reader/releases"
+    "?per_page=10"
+)
 USER_AGENT = "update-notifier/1.0"
 MIN_INTERVAL = 120
 
@@ -41,6 +45,7 @@ def load_config():
         "notify_on_first_run": False,
         "ignore_text": [],
         "include_changelog": True,
+        "release_assets": {},
     }
     cfg.update(load_json(CONFIG_PATH, {}))
     cfg["webhook"] = os.environ.get("DISCORD_WEBHOOK_URL", "")
@@ -160,6 +165,67 @@ def send_update(webhook, device, channel, old, new, changelog=None, link=SITE_UR
     return post_webhook(webhook, {"embeds": [embed]})
 
 
+def fetch_releases():
+    """Return the newest GitHub releases. No token is needed."""
+    req = urllib.request.Request(
+        RELEASES_URL,
+        headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"},
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return [r for r in json.load(resp) if not r.get("draft")]
+
+
+def pick_release(releases, key):
+    """Return (release, file name) for the newest release with a matching file."""
+    for release in sorted(releases, key=lambda r: r["published_at"], reverse=True):
+        for asset in release.get("assets", []):
+            if key.lower() in asset["name"].lower():
+                return release, asset["name"]
+    return None, None
+
+
+def send_release(webhook, device, prev, release, asset, include_body):
+    kind = "release candidate" if release.get("prerelease") else "release"
+    embed = {
+        "title": f"New CrossPoint {kind}: {device}",
+        "url": release["html_url"],
+        "color": 0x2ECC71,
+        "fields": [
+            {"name": "Old", "value": prev or "none", "inline": True},
+            {"name": "New", "value": release["tag_name"], "inline": True},
+            {"name": "File", "value": asset, "inline": False},
+        ],
+    }
+    if include_body and release.get("body"):
+        embed["description"] = release["body"][:1500]
+    return post_webhook(webhook, {"embeds": [embed]})
+
+
+def check_releases(cfg, state):
+    """Notify about new GitHub releases. Return True if the state changed."""
+    releases = fetch_releases()
+    changed = False
+    for device, key in cfg["release_assets"].items():
+        release, asset = pick_release(releases, key)
+        if release is None:
+            log(f"Warning: no GitHub release file contains '{key}'.")
+            continue
+        state_key = f"github:{device}"
+        prev = state.get(state_key, {}).get("version")
+        tag = release["tag_name"]
+        if prev == tag:
+            continue
+        if prev is not None or cfg["notify_on_first_run"]:
+            if not send_release(
+                cfg["webhook"], device, prev, release, asset, cfg["include_changelog"]
+            ):
+                continue
+            log(f"Notified: {device} GitHub {prev} -> {tag}")
+        state[state_key] = {"device": device, "channel": "GitHub", "version": tag}
+        changed = True
+    return changed
+
+
 def push_kuma(status, msg):
     """Send a heartbeat to an Uptime Kuma push monitor, if configured."""
     base = os.environ.get("UPTIME_KUMA_PUSH_URL", "")
@@ -209,10 +275,18 @@ def check(cfg, first_run_ref):
         if ok:
             state[cid] = {"device": device, "channel": channel, "version": version}
             changed = True
+    github_error = None
+    if cfg["release_assets"]:
+        try:
+            changed = check_releases(cfg, state) or changed
+        except Exception as e:
+            github_error = e
     if changed or first_run:
         save_state(state)
     if first_run:
         log(f"First run: saved {len(state)} versions.")
+    if github_error:
+        raise RuntimeError(f"GitHub check failed: {github_error}")
 
 
 def main():
@@ -227,6 +301,12 @@ def main():
             print(p["name"])
             for c in p.get("children", []):
                 print(f"  {c['name']}: {c['description']}")
+        print("GitHub releases (newest 5)")
+        for r in fetch_releases()[:5]:
+            kind = " (release candidate)" if r.get("prerelease") else ""
+            print(f"  {r['tag_name']}{kind}")
+            for a in r.get("assets", []):
+                print(f"    {a['name']}")
         return 0
 
     cfg = load_config()

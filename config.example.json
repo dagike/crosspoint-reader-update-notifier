@@ -2,5 +2,6 @@
   "devices": ["Xteink X4", "Xteink X3"],
   "channels": ["Stable"],
   "interval_seconds": 900,
-  "notify_on_first_run": false
+  "notify_on_first_run": false,
+  "release_assets": {}
 }
